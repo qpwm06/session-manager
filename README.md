@@ -1,6 +1,14 @@
-# Session Manager
+# 会话管理器（Session Manager）
 
 一个本地会话管理工具，用于在浏览器或终端查看、筛选及恢复 Claude Code 和 Codex CLI 会话。
+
+## 界面预览
+
+下图使用模拟会话数据，仅展示界面效果，不包含真实会话内容。
+
+![会话管理器界面示例：会话列表与对话详情](docs/snapshot.png)
+
+## 使用方法
 
 使用 Python 3 运行，无须安装第三方依赖：
 
