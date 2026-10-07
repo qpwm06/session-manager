@@ -440,7 +440,7 @@ def scan_codex_sessions():
 
     for jsonl in CODEX_SESSIONS.rglob("*.jsonl"):
         info = _parse_codex_jsonl(jsonl)
-        sid = info.get("id", jsonl.stem)
+        sid = info.get("id") or jsonl.stem
         idx = index_map.pop(sid, {})
         sessions.append({
             "id": sid,
@@ -460,6 +460,8 @@ def scan_codex_sessions():
 def _parse_codex_jsonl(path):
     """Parse Codex session file for metadata, first user message, and message count."""
     info = {"msg_count": 0}
+    response_count = 0
+    response_first = ""
     try:
         with open(path, "r", errors="replace") as f:
             for line in f:
@@ -480,9 +482,36 @@ def _parse_codex_jsonl(path):
                         info["msg_count"] += 1
                         if not info.get("user_msg"):
                             info["user_msg"] = (payload.get("message") or "")[:120]
+                elif obj.get("type") == "response_item":
+                    message = _codex_response_message(obj.get("payload", {}))
+                    if message and message["role"] == "user":
+                        response_count += 1
+                        if not response_first:
+                            response_first = message["text"][:120]
     except Exception:
         pass
+    # 新版日志以 response_item 保存对话；旧版 event_msg 可能同时存在，避免重复计数。
+    if response_count:
+        info["msg_count"] = response_count
+        info["user_msg"] = response_first
     return info
+
+
+def _codex_response_message(payload):
+    """Extract a user or assistant text message from a Codex response item."""
+    if not isinstance(payload, dict) or payload.get("type") != "message":
+        return None
+    role = payload.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    content = payload.get("content", [])
+    if not isinstance(content, list):
+        return None
+    parts = [part.get("text", "") for part in content
+             if isinstance(part, dict) and part.get("type") in ("input_text", "output_text")
+             and isinstance(part.get("text"), str)]
+    text = "\n".join(part for part in parts if part)
+    return {"role": role, "text": text} if text else None
 
 
 def scan_all():
@@ -530,6 +559,8 @@ def load_messages(session_id):
         except Exception:
             pass
     elif session["source"] == "codex":
+        legacy_messages = []
+        response_messages = []
         try:
             with open(fp, "r", errors="replace") as f:
                 for line in f:
@@ -537,18 +568,24 @@ def load_messages(session_id):
                         obj = json.loads(line)
                     except Exception:
                         continue
+                    if obj.get("type") == "response_item":
+                        message = _codex_response_message(obj.get("payload", {}))
+                        if message:
+                            response_messages.append(message)
                     if obj.get("type") == "event_msg":
                         payload = obj.get("payload", {})
                         if payload.get("type") == "user_message":
                             text = payload.get("message", "")
                             if text:
-                                messages.append({"role": "user", "text": text})
+                                legacy_messages.append({"role": "user", "text": text})
                         elif payload.get("type") == "agent_message":
                             text = payload.get("message", "")
                             if text:
-                                messages.append({"role": "assistant", "text": text})
+                                legacy_messages.append({"role": "assistant", "text": text})
         except Exception:
             pass
+        # 两种记录同时存在时优先使用结构化消息，避免同一轮对话显示两遍。
+        messages = response_messages or legacy_messages
 
     return {
         "id": session["id"],
